@@ -48,8 +48,8 @@ def plot_image_grid(images, rows=None, cols=None, fill: bool = True, show_axes: 
 def plot_image_row(images, labels=None):
     n_images = len(images)
     fig, axarr = plt.subplots(1, n_images, squeeze=False)
-    fig.set_figheight(360 * fig.dpi)
-    fig.set_figwidth(300 * fig.dpi)
+    fig.set_figheight(360 / fig.dpi)
+    fig.set_figwidth(300 / fig.dpi * n_images)
     for i in range(n_images):
         axarr[0, i].imshow(images[i])
         axarr[0, i].set_axis_off()
