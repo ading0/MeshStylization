@@ -66,6 +66,13 @@ class ImageContentLoss(nn.Module):
                 content_loss_recorder = ContentLossRecorder(target)
                 self.model.add_module("content_loss_{}".format(i), content_loss_recorder)
                 self.content_loss_recorders.append(content_loss_recorder)
+        
+        # trim
+        i = len(self.model) - 1
+        while not isinstance(self.model[i], ContentLossRecorder):
+            i -= 1
+
+        self.model = self.model[:(i + 1)]
     
     def forward(self, image: torch.Tensor) -> torch.Tensor:
         self.model(image)
@@ -202,6 +209,8 @@ def run_style_transfer(cnn, normalization_mean, normalization_std,
 
     optimizer = get_input_optimizer(input_img)
 
+    image_content_loss = ImageContentLoss(content_img)
+
     print('Optimizing..')
     run = [0]
     while run[0] <= num_steps:
@@ -214,12 +223,10 @@ def run_style_transfer(cnn, normalization_mean, normalization_std,
             optimizer.zero_grad()
             model(input_img)
             style_score = 0
-            content_score = 0
+            content_score = image_content_loss(input_img)
 
             for sl in style_losses:
                 style_score += sl.loss
-            for cl in content_losses:
-                content_score += cl.loss
 
             style_score *= style_weight
             content_score *= content_weight
@@ -262,8 +269,8 @@ if __name__ == "__main__":
         return image.to(device, torch.float)
 
 
-    style_img = image_loader("./data/images/picasso.jpg")
-    content_img = image_loader("./data/images/cat.png")[:, 0:3, :, :]
+    style_img = image_loader("./data/images/picasso.jpg")[:, 0:3, :, :]
+    content_img = image_loader("./data/images/dancing.jpg")[:, 0:3, :, :]
 
     assert style_img.size() == content_img.size(), \
         f"differing sizes: style image: {style_img.size()}, content image: {content_img.size()}"
