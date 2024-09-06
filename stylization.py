@@ -13,7 +13,6 @@ import copy
 import plotting_utils
 
 class ContentLossRecorder(nn.Module):
-
     def __init__(self, target,):
         super(ContentLossRecorder, self).__init__()
         # we 'detach' the target content from the tree used
@@ -64,7 +63,7 @@ class ImageContentLoss(nn.Module):
                 # add content loss:
                 target = self.model(content_image).detach()
                 content_loss_recorder = ContentLossRecorder(target)
-                self.model.add_module("content_loss_{}".format(i), content_loss_recorder)
+                self.model.add_module("content_loss_recorder_{}".format(i), content_loss_recorder)
                 self.content_loss_recorders.append(content_loss_recorder)
         
         # trim
@@ -98,16 +97,73 @@ def gram_matrix(input):
     # by dividing by the number of element in each feature maps.
     return G.div(a * b * c * d)
 
-class FeatureStyleLoss(nn.Module):
+class StyleLossRecorder(nn.Module):
 
     def __init__(self, target_feature):
-        super(FeatureStyleLoss, self).__init__()
+        super(StyleLossRecorder, self).__init__()
         self.target = gram_matrix(target_feature).detach()
 
     def forward(self, input):
         G = gram_matrix(input)
         self.loss = F.mse_loss(G, self.target)
         return input
+
+class ImageStyleLoss(nn.Module):
+    def __init__(self, style_image):
+        super(ImageStyleLoss, self).__init__()
+
+        cnn: VGG = vgg19(weights=VGG19_Weights.DEFAULT).features.eval()
+        cnn_normalization_mean = torch.tensor([0.485, 0.456, 0.406])
+        cnn_normalization_std = torch.tensor([0.229, 0.224, 0.225])
+        normalization = Normalization(cnn_normalization_mean, cnn_normalization_std)
+
+        self.model = nn.Sequential(normalization)
+        self.style_loss_recorders = []
+
+        style_layers = ['conv_1', 'conv_2', 'conv_3', 'conv_4', 'conv_5']
+
+        i = 0  # increment every time we see a conv
+        for layer in cnn.children():
+            if isinstance(layer, nn.Conv2d):
+                i += 1
+                name = 'conv_{}'.format(i)
+            elif isinstance(layer, nn.ReLU):
+                name = 'relu_{}'.format(i)
+                # The in-place version doesn't play very nicely with the ``ContentLoss``
+                # and ``StyleLoss`` we insert below. So we replace with out-of-place
+                # ones here.
+                layer = nn.ReLU(inplace=False)
+            elif isinstance(layer, nn.MaxPool2d):
+                name = 'pool_{}'.format(i)
+            elif isinstance(layer, nn.BatchNorm2d):
+                name = 'bn_{}'.format(i)
+            else:
+                raise RuntimeError('Unrecognized layer: {}'.format(layer.__class__.__name__))
+
+            self.model.add_module(name, layer)
+
+            if name in style_layers:
+                # add style loss
+                target = self.model(style_image).detach()
+                style_loss_recorder = StyleLossRecorder(target)
+                self.model.add_module("style_loss_recorder_{}".format(i), style_loss_recorder)
+                self.style_loss_recorders.append(style_loss_recorder)
+        
+        # trim
+        i = len(self.model) - 1
+        while not isinstance(self.model[i], StyleLossRecorder):
+            i -= 1
+
+        self.model = self.model[:(i + 1)]
+    
+    def forward(self, image: torch.Tensor) -> torch.Tensor:
+        self.model(image)
+        
+        total_loss = 0
+        for content_loss_recorder in self.style_loss_recorders:
+            total_loss += content_loss_recorder.loss
+        
+        return total_loss
 
 class Normalization(nn.Module):
 
@@ -173,13 +229,13 @@ def get_style_model_and_losses(cnn, normalization_mean, normalization_std,
         if name in style_layers:
             # add style loss:
             target_feature = model(style_img).detach()
-            style_loss = FeatureStyleLoss(target_feature)
+            style_loss = StyleLossRecorder(target_feature)
             model.add_module("style_loss_{}".format(i), style_loss)
             style_losses.append(style_loss)
 
     # now we trim off the layers after the last content and style losses
     for i in range(len(model) - 1, -1, -1):
-        if isinstance(model[i], ContentLossRecorder) or isinstance(model[i], FeatureStyleLoss):
+        if isinstance(model[i], ContentLossRecorder) or isinstance(model[i], StyleLossRecorder):
             break
 
     model = model[:(i + 1)]
