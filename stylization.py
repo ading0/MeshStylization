@@ -7,15 +7,15 @@ from PIL import Image
 import matplotlib.pyplot as plt
 
 import torchvision.transforms as transforms
-from torchvision.models import vgg19, VGG19_Weights
+from torchvision.models import VGG, vgg19, VGG19_Weights
 
 import copy
 import plotting_utils
 
-class ContentLoss(nn.Module):
+class ContentLossRecorder(nn.Module):
 
     def __init__(self, target,):
-        super(ContentLoss, self).__init__()
+        super(ContentLossRecorder, self).__init__()
         # we 'detach' the target content from the tree used
         # to dynamically compute the gradient: this is a stated value,
         # not a variable. Otherwise the forward method of the criterion
@@ -25,6 +25,58 @@ class ContentLoss(nn.Module):
     def forward(self, input):
         self.loss = F.mse_loss(input, self.target)
         return input
+
+class ImageContentLoss(nn.Module):
+    def __init__(self, content_image):
+        super(ImageContentLoss, self).__init__()
+
+        cnn: VGG = vgg19(weights=VGG19_Weights.DEFAULT).features.eval()
+        cnn_normalization_mean = torch.tensor([0.485, 0.456, 0.406])
+        cnn_normalization_std = torch.tensor([0.229, 0.224, 0.225])
+        normalization = Normalization(cnn_normalization_mean, cnn_normalization_std)
+
+        self.model = nn.Sequential(normalization)
+        self.content_loss_recorders = []
+
+        content_layers = ['conv_4']
+
+        i = 0  # increment every time we see a conv
+        for layer in cnn.children():
+            if isinstance(layer, nn.Conv2d):
+                i += 1
+                name = 'conv_{}'.format(i)
+            elif isinstance(layer, nn.ReLU):
+                name = 'relu_{}'.format(i)
+                # The in-place version doesn't play very nicely with the ``ContentLoss``
+                # and ``StyleLoss`` we insert below. So we replace with out-of-place
+                # ones here.
+                layer = nn.ReLU(inplace=False)
+            elif isinstance(layer, nn.MaxPool2d):
+                name = 'pool_{}'.format(i)
+            elif isinstance(layer, nn.BatchNorm2d):
+                name = 'bn_{}'.format(i)
+            else:
+                raise RuntimeError('Unrecognized layer: {}'.format(layer.__class__.__name__))
+
+            self.model.add_module(name, layer)
+
+            if name in content_layers:
+                # add content loss:
+                target = self.model(content_image).detach()
+                content_loss_recorder = ContentLossRecorder(target)
+                self.model.add_module("content_loss_{}".format(i), content_loss_recorder)
+                self.content_loss_recorders.append(content_loss_recorder)
+    
+    def forward(self, image: torch.Tensor) -> torch.Tensor:
+        self.model(image)
+        
+        total_loss = 0
+        for content_loss_recorder in self.content_loss_recorders:
+            total_loss += content_loss_recorder.loss
+        
+        return total_loss
+        
+
 
 def gram_matrix(input):
     a, b, c, d = input.size()  # a=batch size(=1)
@@ -39,10 +91,10 @@ def gram_matrix(input):
     # by dividing by the number of element in each feature maps.
     return G.div(a * b * c * d)
 
-class StyleLoss(nn.Module):
+class FeatureStyleLoss(nn.Module):
 
     def __init__(self, target_feature):
-        super(StyleLoss, self).__init__()
+        super(FeatureStyleLoss, self).__init__()
         self.target = gram_matrix(target_feature).detach()
 
     def forward(self, input):
@@ -107,20 +159,20 @@ def get_style_model_and_losses(cnn, normalization_mean, normalization_std,
         if name in content_layers:
             # add content loss:
             target = model(content_img).detach()
-            content_loss = ContentLoss(target)
+            content_loss = ContentLossRecorder(target)
             model.add_module("content_loss_{}".format(i), content_loss)
             content_losses.append(content_loss)
 
         if name in style_layers:
             # add style loss:
             target_feature = model(style_img).detach()
-            style_loss = StyleLoss(target_feature)
+            style_loss = FeatureStyleLoss(target_feature)
             model.add_module("style_loss_{}".format(i), style_loss)
             style_losses.append(style_loss)
 
     # now we trim off the layers after the last content and style losses
     for i in range(len(model) - 1, -1, -1):
-        if isinstance(model[i], ContentLoss) or isinstance(model[i], StyleLoss):
+        if isinstance(model[i], ContentLossRecorder) or isinstance(model[i], FeatureStyleLoss):
             break
 
     model = model[:(i + 1)]
@@ -211,10 +263,10 @@ if __name__ == "__main__":
 
 
     style_img = image_loader("./data/images/picasso.jpg")
-    content_img = image_loader("./data/images//dancing.jpg")
+    content_img = image_loader("./data/images/cat.png")[:, 0:3, :, :]
 
     assert style_img.size() == content_img.size(), \
-        "we need to import style and content images of the same size"
+        f"differing sizes: style image: {style_img.size()}, content image: {content_img.size()}"
     
     unloader = transforms.ToPILImage()  # reconvert into PIL image
 
