@@ -25,15 +25,7 @@ from pytorch3d.renderer import (
 
 from mesh_io import load_obj_as_normalized_mesh
 from plotting_utils import plot_image_grid
-
-def set_device() -> None:
-    if torch.cuda.is_available():
-        device = torch.device("cuda:0")
-        torch.cuda.set_device(device)
-    else:
-        device = torch.device("cpu")
-    
-    return device
+import utils
 
 def sample_points_on_unit_sphere(n_samples: int) -> torch.Tensor:
     """
@@ -59,24 +51,25 @@ def sample_and_render_views(normalized_mesh: Meshes, n_samples: int, camera_dist
 
     rots, tras = look_at_view_transform(camera_distance, elev=elevations, azim=azimuths, degrees=False)  # use radians
     # rots shape (n_samples, 3, 3); tras shape (n_samples, 3)
-    cameras = FoVPerspectiveCameras(device=device, R=rots, T=tras)
+    cameras = FoVPerspectiveCameras(device=parallel_device, R=rots, T=tras)
     raster_settings = RasterizationSettings(image_size=image_size, blur_radius=0.0, faces_per_pixel=1)
 
-    lights = PointLights(device=device, location=[[0.0, 0.0, -3.0]])
+    lights = PointLights(device=parallel_device, location=[[0.0, 0.0, -3.0]])
 
     rasterizer = MeshRasterizer(cameras=cameras, raster_settings=raster_settings)
-    shader =  SoftPhongShader(device=device, cameras=cameras, lights=lights)
+    shader =  SoftPhongShader(device=parallel_device, cameras=cameras, lights=lights)
     renderer = MeshRenderer(rasterizer=rasterizer, shader=shader)
 
     images = renderer(meshes)
     return images
 
 if __name__ == "__main__":
-    device = set_device()
-    print(f"device: {device}")
+    parallel_device = utils.get_parallel_device()
+    torch.cuda.set_device(parallel_device)
+    print(f"device: {parallel_device}")
 
     obj_file_name = "./data/meshes/cat/model.obj"
-    mesh = load_obj_as_normalized_mesh(obj_file_name, device)
+    mesh = load_obj_as_normalized_mesh(obj_file_name, parallel_device)
 
     n_samples = 20
 
