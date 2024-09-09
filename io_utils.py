@@ -1,5 +1,7 @@
 import torch
+import torchvision.transforms as transforms
 
+from PIL import Image
 from pytorch3d.io import load_objs_as_meshes, load_obj
 from pytorch3d.structures import Meshes
 
@@ -18,3 +20,13 @@ def load_obj_as_normalized_mesh(file_name: str, device: torch.device) -> Meshes:
     mesh.scale_verts_(1.0 / scale * 0.999)  # in-place scale; fit in unit sphere with some tolerance
 
     return mesh
+
+def load_rgb_image(file_name: str, image_size: int = 512, device: torch.device = torch.device("cpu")) -> torch.Tensor:
+    """output should be (image_size, image_size, 3)"""
+    
+    loader = transforms.Compose([transforms.Resize(image_size), transforms.ToTensor()])
+    pil_image = Image.open(file_name)
+    image_tensor = loader(pil_image).to(device, torch.float)[0:3, :, :]
+    return image_tensor
+
+

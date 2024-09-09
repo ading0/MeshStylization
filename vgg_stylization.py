@@ -11,8 +11,9 @@ from torchvision.models import VGG, vgg19, VGG19_Weights
 
 import copy
 
-import utils
+import io_utils
 import plotting_utils
+import utils
 
 class ContentLossRecorder(nn.Module):
     def __init__(self, target,):
@@ -88,17 +89,15 @@ class ImageContentLoss(nn.Module):
 
 
 def gram_matrix(input):
-    a, b, c, d = input.size()  # a=batch size(=1)
-    # b=number of feature maps
+    b, f, c, d = input.size()  # b=batch size(=1)
+    # f=number of feature maps
     # (c,d)=dimensions of a f. map (N=c*d)
 
-    features = input.view(a * b, c * d)  # resize F_XL into \hat F_XL
+    features = input.view(b, f, c * d)  # flatten matrices
+    G = torch.bmm(features, features.permute(0, 2, 1))  # batch Gram product, permutation here is matrix transposition
 
-    G = torch.mm(features, features.t())  # compute the gram product
-
-    # we 'normalize' the values of the gram matrix
-    # by dividing by the number of element in each feature maps.
-    return G.div(a * b * c * d)
+    # 'normalize' the values of the gram matrix by dividing by the number of elements in feature maps
+    return G.div(f * c * d)
 
 class StyleLossRecorder(nn.Module):
 
@@ -183,21 +182,21 @@ class Normalization(nn.Module):
         # normalize ``img``
         return (img - self.mean) / self.std
 
-def run_style_transfer(input_image, content_image, style_image, num_steps=300,
-                       content_weight=1, style_weight=1000000):
+def run_style_transfer(input_images, content_images, style_images, num_steps,
+                       content_weight=1.0, style_weight=1e6):
     """Run the style transfer."""
     print('Building the style transfer model..')
 
     # We want to optimize the input and not the model parameters so we
     # update all the requires_grad fields accordingly
-    input_image.requires_grad_(True)
+    input_images.requires_grad_(True)
     # We also put the model in evaluation mode, so that specific layers
     # such as dropout or batch normalization layers behave correctly.
 
-    optimizer = optim.LBFGS([input_image])
+    optimizer = optim.LBFGS([input_images])
 
-    image_content_loss = ImageContentLoss(content_image)
-    image_style_loss = ImageStyleLoss(style_image)
+    image_content_loss = ImageContentLoss(content_images)
+    image_style_loss = ImageStyleLoss(style_images)
 
     print('Optimizing..')
     run = [0]
@@ -206,12 +205,12 @@ def run_style_transfer(input_image, content_image, style_image, num_steps=300,
         def closure():
             # correct the values of updated input image
             with torch.no_grad():
-                input_image.clamp_(0, 1)
+                input_images.clamp_(0, 1)
 
             style_score = 0
             
-            content_score = content_weight * image_content_loss(input_image)
-            style_score = style_weight * image_style_loss(input_image)
+            content_score = content_weight * image_content_loss(input_images)
+            style_score = style_weight * image_style_loss(input_images)
 
             loss = style_score + content_score
             
@@ -231,9 +230,9 @@ def run_style_transfer(input_image, content_image, style_image, num_steps=300,
 
     # a last correction...
     with torch.no_grad():
-        input_image.clamp_(0, 1)
+        input_images.clamp_(0, 1)
 
-    return input_image
+    return input_images
 
 if __name__ == "__main__":
     parallel_device = utils.get_parallel_device()
@@ -241,32 +240,25 @@ if __name__ == "__main__":
 
     imsize = 512 if torch.cuda.is_available() else 128  # use small size if no GPU
 
-    loader = transforms.Compose([transforms.Resize(imsize), transforms.ToTensor()])
+    content_image_fns = ["./data/images/dancing.jpg", "./data/images/cat.png"]
+    style_image_fns = ["./data/images/picasso.jpg"] * 2
 
-    def load_image_to_parallel_device(image_name):
-        image = Image.open(image_name)
-        # fake batch dimension required to fit network's input dimensions
-        image = loader(image).unsqueeze(0)
-        return image.to(parallel_device, torch.float)
+    content_images = torch.stack([io_utils.load_rgb_image(fn, device=parallel_device) for fn in content_image_fns])
+    style_images = torch.stack([io_utils.load_rgb_image(fn, device=parallel_device) for fn in style_image_fns])
 
-
-    style_image = load_image_to_parallel_device("./data/images/picasso.jpg")[:, 0:3, :, :]
-    content_image = load_image_to_parallel_device("./data/images/dancing.jpg")[:, 0:3, :, :]
-
-    assert style_image.size() == content_image.size(), \
-        f"differing sizes: style image: {style_image.size()}, content image: {content_image.size()}"
+    print(f"content images shape: {content_images.shape}, style images shape: {style_images.shape}")
     
     unloader = transforms.ToPILImage()  # reconvert into PIL image
 
-    input_image = content_image.clone()
+    input_images = content_images.clone()
 
-    output_image = run_style_transfer(input_image, content_image, style_image)
+    output_images = run_style_transfer(input_images, content_images, style_images, 300)
 
     # sphinx_gallery_thumbnail_number = 4
 
-    images = [content_image, style_image, output_image]
+    images = [output_images[0], output_images[1]]
     plot_images = [unloader(img.cpu().clone().squeeze(0)) for img in images]
 
-    plotting_utils.plot_image_row(plot_images, ["content", "style", "output"])
+    plotting_utils.plot_image_row(plot_images)
     plt.show()
     

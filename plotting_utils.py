@@ -5,14 +5,15 @@
 # LICENSE file in the root directory of this source tree.
 
 import matplotlib.pyplot as plt
+import numpy as np
 
 
-def plot_image_grid(images, rows=None, cols=None, fill: bool = True, show_axes: bool = False, rgb: bool = True):
+def plot_image_grid(images, rows=None, cols=None, fill: bool = True, show_axes: bool = False):
     """
     A util function for plotting a grid of images.
 
     Args:
-        images: (N, H, W, 4) array of RGBA images
+        images: (N, 3, H, W) array of RGBA images
         rows: number of rows in the grid
         cols: number of columns in the grid
         fill: boolean indicating if the space between images should be filled
@@ -36,12 +37,8 @@ def plot_image_grid(images, rows=None, cols=None, fill: bool = True, show_axes: 
     fig.subplots_adjust(left=bleed, bottom=bleed, right=(1 - bleed), top=(1 - bleed))
 
     for ax, im in zip(axarr.ravel(), images):
-        if rgb:
-            # only render RGB channels
-            ax.imshow(im[..., :3])
-        else:
-            # only render Alpha channel
-            ax.imshow(im[..., 3])
+        im = np.transpose(im, [1, 2, 0])
+        ax.imshow(im)
         if not show_axes:
             ax.set_axis_off()
 

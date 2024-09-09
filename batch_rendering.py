@@ -23,8 +23,8 @@ from pytorch3d.renderer import (
     TexturesVertex
 )
 
-from mesh_io import load_obj_as_normalized_mesh
-from plotting_utils import plot_image_grid
+import io_utils
+import plotting_utils
 import utils
 
 def sample_points_on_unit_sphere(n_samples: int) -> torch.Tensor:
@@ -37,31 +37,39 @@ def sample_points_on_unit_sphere(n_samples: int) -> torch.Tensor:
     points = raw_points / raw_points_scale
     return points
 
-def sample_and_render_views(normalized_mesh: Meshes, n_samples: int, camera_distance: float, image_size: int) -> torch.Tensor:
-    """
-    return shape: (n_samples, image_size, image_size, 4)
-    """
+def get_random_cameras(n_samples: int, camera_distance: float, device: torch.device) -> FoVPerspectiveCameras:
     assert(camera_distance > 1.0)  # since the mesh is in a unit sphere, distance should be substantially above 1
-
-    meshes = normalized_mesh.extend(n_samples)
 
     sphere_points = sample_points_on_unit_sphere(n_samples)
     elevations = torch.atan(sphere_points[:, 1] / sphere_points[:, 2])  # radians
     azimuths = torch.atan(sphere_points[:, 0] / sphere_points[:, 1])  # radians
-
     rots, tras = look_at_view_transform(camera_distance, elev=elevations, azim=azimuths, degrees=False)  # use radians
-    # rots shape (n_samples, 3, 3); tras shape (n_samples, 3)
-    cameras = FoVPerspectiveCameras(device=parallel_device, R=rots, T=tras)
+    cameras = FoVPerspectiveCameras(device=device, R=rots, T=tras)
+    return cameras
+
+def render_views(normalized_mesh: Meshes, cameras: FoVPerspectiveCameras, image_size: int, device: torch.device) -> torch.Tensor:
+    """
+    return shape: (n_samples, image_size, image_size, 4)
+    """
+    n_views = cameras.get_camera_center().shape[0]
+    meshes = normalized_mesh.extend(n_views)
+
     raster_settings = RasterizationSettings(image_size=image_size, blur_radius=0.0, faces_per_pixel=1)
 
-    lights = PointLights(device=parallel_device, location=[[0.0, 0.0, -3.0]])
+    lights = PointLights(device=device, location=[[0.0, 0.0, -3.0]])
 
     rasterizer = MeshRasterizer(cameras=cameras, raster_settings=raster_settings)
-    shader =  SoftPhongShader(device=parallel_device, cameras=cameras, lights=lights)
+    shader =  SoftPhongShader(device=device, cameras=cameras, lights=lights)
     renderer = MeshRenderer(rasterizer=rasterizer, shader=shader)
 
-    images = renderer(meshes)
-    return images
+    images_rgba = renderer(meshes)  # n_samples, C, D, 4
+    images_rgb_raw = images_rgba[:, :, :, 0:3]
+    images_alpha = images_rgba[:, :, :, 3:4]
+
+    images_rgb = images_rgb_raw * images_alpha + (1. - images_alpha)  # n_samples, C, D, 3
+    images_rgb_reshaped = torch.permute(images_rgb, [0, 3, 1, 2])  # n_samples, 3, C, D
+
+    return images_rgb_reshaped
 
 if __name__ == "__main__":
     parallel_device = utils.get_parallel_device()
@@ -69,12 +77,13 @@ if __name__ == "__main__":
     print(f"device: {parallel_device}")
 
     obj_file_name = "./data/meshes/cat/model.obj"
-    mesh = load_obj_as_normalized_mesh(obj_file_name, parallel_device)
+    mesh = io_utils.load_obj_as_normalized_mesh(obj_file_name, parallel_device)
 
     n_samples = 20
 
-    images = sample_and_render_views(mesh, n_samples, 2, 512)
+    cameras = get_random_cameras(20, 2.0, parallel_device)
+    images = render_views(mesh, cameras, 512, parallel_device)
     print(images.shape)
 
-    plot_image_grid(images.cpu().numpy(), rows=4, cols=5, rgb=True)
+    plotting_utils.plot_image_grid(images.cpu().numpy(), rows=4, cols=5)
     plt.show()
