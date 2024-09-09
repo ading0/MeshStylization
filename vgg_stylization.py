@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
+import torchviz
 
 from PIL import Image
 import matplotlib.pyplot as plt
@@ -216,6 +217,10 @@ def run_style_transfer(input_images, content_images, style_images, num_steps,
             
             optimizer.zero_grad()
             loss.backward()
+
+            if run[0] == 0:
+                graph = torchviz.make_dot(loss, params={"input_images": input_images})
+                graph.render(filename='./torchviz_output/vgg_stylization')
 
             run[0] += 1
             if run[0] % 50 == 0:

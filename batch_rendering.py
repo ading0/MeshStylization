@@ -56,7 +56,12 @@ def render_views(normalized_mesh: Meshes, cameras: FoVPerspectiveCameras, image_
 
     raster_settings = RasterizationSettings(image_size=image_size, blur_radius=0.0, faces_per_pixel=1)
 
-    lights = PointLights(device=device, location=[[0.0, 0.0, -3.0]])
+    light_ambient_colors = [(0.5, 0, 0), (0, 0.5, 0), (0, 0, 0.5)]
+    light_diffuse_colors = [(0.3, 0, 0), (0, 0.3, 0), (0, 0, 0.3)]
+    light_specular_colors = [(0.2, 0, 0), (0, 0.2, 0), (0, 0, 0.2)]
+    light_directions = [(1, 0, 0), (0, 1, 0), (0, 0, 1)]
+    lights = DirectionalLights(direction=[(1, 0, 0), (0, 1, 0)],
+                               device=device)
 
     rasterizer = MeshRasterizer(cameras=cameras, raster_settings=raster_settings)
     shader =  SoftPhongShader(device=device, cameras=cameras, lights=lights)
