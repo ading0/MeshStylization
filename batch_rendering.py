@@ -6,9 +6,7 @@ import torch
 
 import pytorch3d
 # Data structures and functions for rendering
-from pytorch3d.structures import Meshes
-from pytorch3d.vis.plotly_vis import AxisArgs, plot_batch_individually, plot_scene
-from pytorch3d.vis.texture_vis import texturesuv_image_matplotlib
+from pytorch3d.ops import sample_points_from_meshes
 from pytorch3d.renderer import (
     look_at_view_transform,
     FoVPerspectiveCameras, 
@@ -22,6 +20,10 @@ from pytorch3d.renderer import (
     TexturesUV,
     TexturesVertex
 )
+from pytorch3d.structures import Meshes
+from pytorch3d.vis.plotly_vis import AxisArgs, plot_batch_individually, plot_scene
+from pytorch3d.vis.texture_vis import texturesuv_image_matplotlib
+
 
 import io_utils
 import plotting_utils
@@ -37,13 +39,26 @@ def sample_points_on_unit_sphere(n_samples: int) -> torch.Tensor:
     points = raw_points / raw_points_scale
     return points
 
-def get_random_cameras(n_samples: int, camera_distance: float, device: torch.device) -> FoVPerspectiveCameras:
-    assert(camera_distance > 1.0)  # since the mesh is in a unit sphere, distance should be substantially above 1
+def get_random_cameras(mesh: Meshes, n_samples: int, camera_distance: float, device: torch.device) -> FoVPerspectiveCameras:
+    points, normals = sample_points_from_meshes(mesh, n_samples, return_normals=True)
+    points = points.squeeze()
+    normals = normals.squeeze()
+    rot_list = []
+    tra_list = []
+    for i in range(n_samples):
+        eye = (points[i] + camera_distance * normals[i]).unsqueeze(0)  # (1, 3)
+        at = points[i].unsqueeze(0)
+        up = torch.tensor([0, 1, 0], device=device).float().unsqueeze(0)
+        
+        rot, tra = look_at_view_transform(eye=eye, at=at, up=up)
 
-    sphere_points = sample_points_on_unit_sphere(n_samples)
-    elevations = torch.atan(sphere_points[:, 1] / sphere_points[:, 2])  # radians
-    azimuths = torch.atan(sphere_points[:, 0] / sphere_points[:, 1])  # radians
-    rots, tras = look_at_view_transform(camera_distance, elev=elevations, azim=azimuths, degrees=False)  # use radians
+        rot_list.append(rot)
+        tra_list.append(tra)
+
+    rots = torch.concat(rot_list, dim=0)
+    tras = torch.concat(tra_list, dim=0)
+
+    # rots, tras = look_at_view_transform(camera_distance, elev=elevations, azim=azimuths, degrees=False)  # use radians
     cameras = FoVPerspectiveCameras(device=device, R=rots, T=tras)
     return cameras
 
@@ -60,7 +75,7 @@ def render_views(normalized_mesh: Meshes, cameras: FoVPerspectiveCameras, image_
     light_diffuse_colors = [(0.3, 0, 0), (0, 0.3, 0), (0, 0, 0.3)]
     light_specular_colors = [(0.2, 0, 0), (0, 0.2, 0), (0, 0, 0.2)]
     light_directions = [(1, 0, 0), (0, 1, 0), (0, 0, 1)]
-    lights = DirectionalLights(direction=[(1, 0, 0), (0, 1, 0)],
+    lights = DirectionalLights(direction=[(1, 0, 0)],
                                device=device)
 
     rasterizer = MeshRasterizer(cameras=cameras, raster_settings=raster_settings)
@@ -86,7 +101,7 @@ if __name__ == "__main__":
 
     n_samples = 20
 
-    cameras = get_random_cameras(20, 2.0, parallel_device)
+    cameras = get_random_cameras(mesh, 20, 0.1, parallel_device)
     images = render_views(mesh, cameras, 512, parallel_device)
     print(images.shape)
 
