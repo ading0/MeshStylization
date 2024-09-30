@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 import os
 import sys
 import torch
+from typing import Optional
 
 import pytorch3d
 # Data structures and functions for rendering
@@ -11,7 +12,8 @@ from pytorch3d.renderer import (
     look_at_view_transform,
     FoVPerspectiveCameras, 
     PointLights, 
-    DirectionalLights, 
+    DirectionalLights,
+    HardFlatShader,
     Materials, 
     RasterizationSettings, 
     MeshRenderer, 
@@ -39,71 +41,97 @@ def sample_points_on_unit_sphere(n_samples: int) -> torch.Tensor:
     points = raw_points / raw_points_scale
     return points
 
-def get_random_cameras(mesh: Meshes, n_samples: int, camera_distance: float, device: torch.device) -> FoVPerspectiveCameras:
+def get_random_cameras_and_lights(
+    mesh: Meshes,
+    n_samples: int,
+    camera_distance: float, 
+    device: torch.device
+) -> tuple[FoVPerspectiveCameras, PointLights]:
+    
     points, normals = sample_points_from_meshes(mesh, n_samples, return_normals=True)
     points = points.squeeze()
     normals = normals.squeeze()
     rot_list = []
     tra_list = []
+    light_loc_list = []
     for i in range(n_samples):
         eye = (points[i] + camera_distance * normals[i]).unsqueeze(0)  # (1, 3)
         at = points[i].unsqueeze(0)
-        up = torch.tensor([0, 1, 0], device=device).float().unsqueeze(0)
+        up = torch.tensor([0, 1, 0], device=device).float().unsqueeze(0)  # (1, 3)
         
         rot, tra = look_at_view_transform(eye=eye, at=at, up=up)
-
+        
         rot_list.append(rot)
         tra_list.append(tra)
+        light_loc_list.append((eye + at) * 0.5)
 
+    # all shapes below are (n_samples, 3)
     rots = torch.concat(rot_list, dim=0)
     tras = torch.concat(tra_list, dim=0)
+    light_locs = torch.concat(light_loc_list, dim=0)
 
     # rots, tras = look_at_view_transform(camera_distance, elev=elevations, azim=azimuths, degrees=False)  # use radians
-    cameras = FoVPerspectiveCameras(device=device, R=rots, T=tras)
-    return cameras
+    cameras = FoVPerspectiveCameras(R=rots, T=tras, device=device)
+    lights = PointLights(location=light_locs, device=device)
+    return cameras, lights
 
-def render_views(normalized_mesh: Meshes, cameras: FoVPerspectiveCameras, image_size: int, device: torch.device) -> torch.Tensor:
+def assemble_rgb_images(rgba_images: torch.tensor, background: torch.tensor, alpha_threshold=0.01) -> torch.tensor:
+    """
+    expected shape of rgba images, (n_samples, 4, C, D)
+    background: (n_sampoes, 3, C, D)
+    """
+    assert rgba_images.shape[1] == 4
+
+    rgb_raw = rgba_images[:, 0:3, :, :]
+    alpha = rgba_images[:, 3:4, :, :]
+    foreground_condition = torch.ge(alpha, alpha_threshold).expand(-1, 3, -1, -1)
+    return torch.where(foreground_condition, rgb_raw, background)
+
+
+def render_views(
+    normalized_mesh: Meshes, 
+    cameras: FoVPerspectiveCameras, 
+    lights: DirectionalLights, 
+    image_size: int,
+    device: torch.device,
+    background: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
     """
     return shape: (n_samples, image_size, image_size, 4)
     """
-    n_views = cameras.get_camera_center().shape[0]
+    n_views = len(cameras)
+
+    if background is None:
+        background = torch.ones(3, image_size, image_size).float().to(device)  # should broadcast to (n_samples, 3, image_size, image_size)
+
     meshes = normalized_mesh.extend(n_views)
 
     raster_settings = RasterizationSettings(image_size=image_size, blur_radius=0.0, faces_per_pixel=1)
 
-    light_ambient_colors = [(0.5, 0, 0), (0, 0.5, 0), (0, 0, 0.5)]
-    light_diffuse_colors = [(0.3, 0, 0), (0, 0.3, 0), (0, 0, 0.3)]
-    light_specular_colors = [(0.2, 0, 0), (0, 0.2, 0), (0, 0, 0.2)]
-    light_directions = [(1, 0, 0), (0, 1, 0), (0, 0, 1)]
-    lights = DirectionalLights(direction=[(1, 0, 0)],
-                               device=device)
-
     rasterizer = MeshRasterizer(cameras=cameras, raster_settings=raster_settings)
-    shader =  SoftPhongShader(device=device, cameras=cameras, lights=lights)
+    shader =  HardFlatShader(device=device, cameras=cameras, lights=lights)
     renderer = MeshRenderer(rasterizer=rasterizer, shader=shader)
 
-    images_rgba = renderer(meshes)  # n_samples, C, D, 4
-    images_rgb_raw = images_rgba[:, :, :, 0:3]
-    images_alpha = images_rgba[:, :, :, 3:4]
+    materials = Materials(device=device)
 
-    images_rgb = images_rgb_raw * images_alpha + (1. - images_alpha)  # n_samples, C, D, 3
-    images_rgb_reshaped = torch.permute(images_rgb, [0, 3, 1, 2])  # n_samples, 3, C, D
-
-    return images_rgb_reshaped
+    rgba_images_nonstandard_shape = renderer(meshes, materials=materials)  # (n_samples, C, D, 4)
+    rgba_images = torch.permute(rgba_images_nonstandard_shape, [0, 3, 1, 2])  # (n_samples, 4, C, D)
+    rgb_images = assemble_rgb_images(rgba_images, background)  # (n_samples, 3, C, D)
+    return rgb_images
 
 if __name__ == "__main__":
     parallel_device = utils.get_parallel_device()
     torch.cuda.set_device(parallel_device)
     print(f"device: {parallel_device}")
 
-    obj_file_name = "./data/meshes/cat/model.obj"
-    mesh = io_utils.load_obj_as_normalized_mesh(obj_file_name, parallel_device)
+    mesh_fn = "./data/meshes/treefrog.obj"
+    mesh = io_utils.load_obj_as_normalized_mesh(mesh_fn, parallel_device)
 
     n_samples = 20
 
-    cameras = get_random_cameras(mesh, 20, 0.1, parallel_device)
-    images = render_views(mesh, cameras, 512, parallel_device)
-    print(images.shape)
+    cameras, lights = get_random_cameras_and_lights(mesh, 20, 2.0, parallel_device)
+    images = render_views(mesh, cameras, lights, 256, parallel_device)
+    print(f"images tensor shape: {images.shape}")
 
     plotting_utils.plot_image_grid(images.cpu().numpy(), rows=4, cols=5)
     plt.show()
