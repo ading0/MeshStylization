@@ -131,7 +131,7 @@ if __name__ == "__main__":
 
     cameras, lights = get_random_cameras_and_lights(mesh, 20, 2.0, parallel_device)
     images = render_views(mesh, cameras, lights, 256, parallel_device)
-    print(f"images tensor shape: {images.shape}")
+    print(f"[DEBUG] images tensor shape: {images.shape}")
 
     plotting_utils.plot_image_grid(images.cpu().numpy(), rows=4, cols=5)
     plt.show()
