@@ -11,7 +11,7 @@ from pytorch3d.loss import mesh_normal_consistency, mesh_edge_loss, chamfer_dist
 from pytorch3d.renderer.mesh.textures import Textures
 
 import vgg_losses
-import batch_rendering
+import rendering
 import utils
 import plotting_utils
 import io_utils
@@ -28,37 +28,36 @@ if __name__ == "__main__":
     # PARAMETERS
     image_size = 512
     n_views = 16
-    n_iters_per_view_set = 10
+    n_iters_per_view_set = 100
     n_view_sets = 1
-    reduced_image_size = 8
+    reduced_image_size = 16
     camera_distance = 1.0
 
     mesh_verts_deformation = torch.zeros_like(mesh.verts_packed())
     mesh_verts_deformation.requires_grad_(True)
 
-    optimizer = torch.optim.SGD([mesh_verts_deformation], lr=0.1)
+    optimizer = torch.optim.SGD([mesh_verts_deformation], lr=1.0)
     
     for vs_idx in range(n_view_sets):
 
-        cameras, lights = batch_rendering.get_random_cameras_and_lights(mesh, n_views, camera_distance, parallel_device)
+        cameras, lights = rendering.get_random_cameras_and_lights(mesh, n_views, camera_distance, parallel_device)
 
         for it_idx in range(n_iters_per_view_set):
 
             deformed_mesh = mesh.offset_verts(mesh_verts_deformation)
             
-            rendered_images = batch_rendering.render_views(deformed_mesh, cameras, lights, image_size, parallel_device)
+            rendered_images = rendering.render_views(deformed_mesh, cameras, lights, image_size, parallel_device)
 
             superpixel_score = superpixel_loss(rendered_images, reduced_image_size)
-            normal_consistency_score = 1e2 * mesh_normal_consistency(deformed_mesh)
-            loss_value = superpixel_score + normal_consistency_score
+            loss_value = superpixel_score
 
-            print(f"iter: {it_idx}, loss: {loss_value.item()}; superpixel: {superpixel_score.item()}, normal_consist: {normal_consistency_score.item()}")
+            print(f"iter: {it_idx}, loss: {loss_value.item()}; superpixel: {superpixel_score.item()}")
 
             optimizer.zero_grad()
             loss_value.backward()
             optimizer.step()
 
-            if it_idx == 0:
+            if it_idx == 0 and False:
                 debug_image_size = 512
 
                 # TEMPORARY CODE TO VISUALIZE GRADIENT
@@ -75,18 +74,20 @@ if __name__ == "__main__":
                 colors = colors.unsqueeze(0)
                 grad_mesh.textures = Textures(verts_rgb=colors)
 
-                grad_renders = batch_rendering.render_views(grad_mesh, cameras, lights, debug_image_size, parallel_device)
-                normal_renders = batch_rendering.render_views(mesh, cameras, lights, debug_image_size, parallel_device)
+                grad_renders = rendering.render_views(grad_mesh, cameras, lights, debug_image_size, parallel_device)
+                normal_renders = rendering.render_views(mesh, cameras, lights, debug_image_size, parallel_device)
 
                 renders = torch.cat([grad_renders[0:8], normal_renders[0:8]], dim=0)
                 plotting_utils.plot_image_grid(renders[0:16].cpu().detach().numpy(), rows=4, cols=4)
                 plt.show()
 
+                exit()
+
     
         if vs_idx == n_view_sets - 1:
             
             deformed_mesh = mesh.offset_verts(mesh_verts_deformation)
-            final_rendered_images = batch_rendering.render_views(deformed_mesh, cameras, lights, image_size, parallel_device)
+            final_rendered_images = rendering.render_views(deformed_mesh, cameras, lights, image_size, parallel_device)
             plotting_utils.plot_image_grid(final_rendered_images[0:16].cpu().detach().numpy(), rows=4, cols=4)
             plt.show()
 

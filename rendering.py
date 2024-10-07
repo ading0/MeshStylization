@@ -109,7 +109,7 @@ def render_views(
     raster_settings = RasterizationSettings(image_size=image_size, blur_radius=0.0, faces_per_pixel=1)
 
     rasterizer = MeshRasterizer(cameras=cameras, raster_settings=raster_settings)
-    shader =  HardFlatShader(device=device, cameras=cameras, lights=lights)
+    shader =  SoftPhongShader(device=device, cameras=cameras, lights=lights)
     renderer = MeshRenderer(rasterizer=rasterizer, shader=shader)
 
     materials = Materials(device=device)
