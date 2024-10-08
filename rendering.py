@@ -1,5 +1,6 @@
 import math
 import matplotlib.pyplot as plt
+import numpy as np
 import os
 import sys
 import torch
@@ -10,6 +11,7 @@ import pytorch3d
 from pytorch3d.ops import sample_points_from_meshes
 from pytorch3d.renderer import (
     look_at_view_transform,
+    BlendParams,
     FoVPerspectiveCameras, 
     PointLights, 
     DirectionalLights,
@@ -106,7 +108,7 @@ def render_views(
 
     meshes = normalized_mesh.extend(n_views)
 
-    raster_settings = RasterizationSettings(image_size=image_size, blur_radius=0.0, faces_per_pixel=1)
+    raster_settings = RasterizationSettings(image_size=image_size)
 
     rasterizer = MeshRasterizer(cameras=cameras, raster_settings=raster_settings)
     shader =  SoftPhongShader(device=device, cameras=cameras, lights=lights)

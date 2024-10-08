@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
-def plot_image_grid(images, rows=None, cols=None, fill: bool = True, show_axes: bool = False):
+def plot_image_grid(images, rows=None, cols=None, labels=None, fill: bool = True, show_axes: bool = False):
     """
     A util function for plotting a grid of images.
 
@@ -26,6 +26,12 @@ def plot_image_grid(images, rows=None, cols=None, fill: bool = True, show_axes: 
     """
     if (rows is None) != (cols is None):
         raise ValueError("Specify either both rows and cols or neither.")
+    
+    if labels is None:
+        labels = []
+    while len(labels) < images.shape[0]:
+        labels.append("")
+    labels = labels[0:images.shape[0]]
 
     if rows is None:
         rows = len(images)
@@ -36,9 +42,10 @@ def plot_image_grid(images, rows=None, cols=None, fill: bool = True, show_axes: 
     bleed = 0
     fig.subplots_adjust(left=bleed, bottom=bleed, right=(1 - bleed), top=(1 - bleed))
 
-    for ax, im in zip(axarr.ravel(), images):
+    for ax, im, label in zip(axarr.ravel(), images, labels):
         im = np.transpose(im, [1, 2, 0])
         ax.imshow(im)
+        ax.set_title(label)
         if not show_axes:
             ax.set_axis_off()
 
